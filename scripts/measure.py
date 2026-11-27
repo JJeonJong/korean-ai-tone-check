@@ -1535,13 +1535,13 @@ def output_closed(err, fd=None, windows=None):
         return False
 
 
-def say(text):
+def say(text, end="\n"):
     """표준출력에 쓰고 바로 비운다. 출력을 받던 쪽이 먼저 닫혔으면 할 일은 끝났으므로 조용히 넘어간다.
 
     오류는 쓰고 비우는 이 자리에서만 받는다. 다른 자리에서 난 오류는 그대로 낸다.
     """
     try:
-        sys.stdout.write(text + "\n")
+        sys.stdout.write(text + end)
         sys.stdout.flush()
     except OSError as err:
         if not output_closed(err):
@@ -1552,13 +1552,23 @@ def say(text):
             pass
 
 
+class Parser(argparse.ArgumentParser):
+    """도움말(-h, --help)도 say()로 내보내는 인자 해석기. 잘못된 인자의 사용법과 오류는 argparse대로 표준오류로 낸다."""
+
+    def print_help(self, file=None):
+        if file is None:
+            say(self.format_help(), end="")
+        else:
+            super().print_help(file)
+
+
 def main():
     for stream in (sys.stdout, sys.stderr):   # 윈도우 셸에서도 한글이 깨지지 않게
         try:
             stream.reconfigure(encoding="utf-8", errors="backslashreplace")
         except (AttributeError, ValueError):
             pass
-    ap = argparse.ArgumentParser(description="긴 한국어 글의 AI 말투 지표를 잰다.")
+    ap = Parser(description="긴 한국어 글의 AI 말투 지표를 잰다.")
     ap.add_argument("path", nargs="?", help="측정할 파일")
     ap.add_argument("--genre", choices=sorted(TH), default="general", help="general(기본) 또는 academic(논문·초록)")
     ap.add_argument("--mark", action="store_true", help="지금 내용을 비교 기준본으로 저장")
