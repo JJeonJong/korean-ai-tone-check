@@ -28,6 +28,7 @@
 import argparse
 import bisect
 import difflib
+import errno
 import hashlib
 import math
 import os
@@ -40,7 +41,7 @@ import time
 import unicodedata
 from collections import Counter
 
-VERSION = "2.2"
+VERSION = "2.2.1"
 MIN_SENT = 8      # 비율 지표를 계산할 최소 한국어 문장 수
 MIN_STYLE = 20    # 문장 길이·끝맺음 지표를 계산할 최소 한국어 문장 수(짧은 글에서는 값이 크게 흔들린다)
 MAX_EX = 3        # 항목당 보여 줄 예시 수
@@ -1586,11 +1587,32 @@ def main():
     print("\n".join(out))   # 저장까지 마친 뒤 한 번에 내보낸다(출력이 도중에 끊겨도 기준본은 남는다)
 
 
+def output_closed(err, windows=None):
+    """출력을 받던 쪽이 먼저 닫혀서 난 오류인가('| head' 따위).
+
+    리눅스와 macOS는 BrokenPipeError를 낸다. 윈도우는 닫힌 파이프에 쓰면 OSError [Errno 22](EINVAL)를 낸다.
+    EINVAL은 다른 까닭으로도 나므로 출력을 한 번 더 비워 보고, 그것도 실패할 때만 끊긴 것으로 본다.
+    """
+    if isinstance(err, BrokenPipeError):
+        return True
+    if windows is None:
+        windows = os.name == "nt"
+    if not windows or err.errno != errno.EINVAL:
+        return False
+    try:
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        return True
+    return False
+
+
 if __name__ == "__main__":
     try:
         main()
         sys.stdout.flush()
-    except BrokenPipeError:   # 출력을 받던 쪽이 먼저 닫혔다('| head' 따위). 할 일은 끝났으므로 조용히 마친다
+    except OSError as err:   # 출력을 받던 쪽이 먼저 닫혔으면 할 일은 끝났으므로 조용히 마친다. 다른 오류는 그대로 낸다
+        if not output_closed(err):
+            raise
         try:
             os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         except (OSError, ValueError, AttributeError):
