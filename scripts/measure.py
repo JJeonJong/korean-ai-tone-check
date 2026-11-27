@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ai-tone-check 측정기 v2.2.
+"""ai-tone-check 측정기 v2.2.1.
 
 긴 한국어 글에서 AI가 쓴 글에 많은 표면 특징을 재서 '다시 볼 곳'을 알려 준다. 판정기가 아니다.
 
@@ -1517,6 +1517,41 @@ def age_text(seconds):
     return f"{round(seconds / 86400)}일 전"
 
 
+def output_closed(err, fd=None, windows=None):
+    """출력을 받던 쪽이 먼저 닫혀서 난 오류인가('| head' 따위).
+
+    리눅스와 macOS는 BrokenPipeError를 낸다. 윈도우는 닫힌 파이프에 쓰면 OSError [Errno 22](EINVAL)를 낸다.
+    EINVAL은 일반 파일에 쓰지 못했을 때처럼 다른 까닭으로도 나므로, 표준출력이 파이프일 때만 끊긴 것으로 본다.
+    """
+    if isinstance(err, BrokenPipeError):
+        return True
+    if windows is None:
+        windows = os.name == "nt"
+    if not windows or err.errno != errno.EINVAL:
+        return False
+    try:
+        return stat.S_ISFIFO(os.fstat(sys.stdout.fileno() if fd is None else fd).st_mode)
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def say(text):
+    """표준출력에 쓰고 바로 비운다. 출력을 받던 쪽이 먼저 닫혔으면 할 일은 끝났으므로 조용히 넘어간다.
+
+    오류는 쓰고 비우는 이 자리에서만 받는다. 다른 자리에서 난 오류는 그대로 낸다.
+    """
+    try:
+        sys.stdout.write(text + "\n")
+        sys.stdout.flush()
+    except OSError as err:
+        if not output_closed(err):
+            raise
+        try:   # 남은 출력은 버린다. 파이썬이 끝날 때 다시 비우다가 같은 오류를 내지 않게 한다
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except (OSError, ValueError, AttributeError):
+            pass
+
+
 def main():
     for stream in (sys.stdout, sys.stderr):   # 윈도우 셸에서도 한글이 깨지지 않게
         try:
@@ -1534,10 +1569,10 @@ def main():
     ap.add_argument("--scratch", action="store_true", help="채팅용 글을 저장할 임시 파일 경로를 알려 준다")
     args = ap.parse_args()
     if args.scratch:
-        print(os.path.join(store_dir(), f"draft-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid() % 1000:03d}.md"))
+        say(os.path.join(store_dir(), f"draft-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid() % 1000:03d}.md"))
         return
     if args.diff:
-        print(compare_report(read_text(args.diff[0]), read_text(args.diff[1])))
+        say(compare_report(read_text(args.diff[0]), read_text(args.diff[1])))
         return
     if not args.path:
         ap.error("파일 경로를 주세요.")
@@ -1549,13 +1584,13 @@ def main():
         if draft:   # 임시 초안은 초안 파일까지 지운다. 그 밖의 원고 파일은 건드리지 않는다
             os.remove(args.path)
         if had_snap and draft:
-            print("이 글의 기준본과 임시 초안을 지웠습니다.")
+            say("이 글의 기준본과 임시 초안을 지웠습니다.")
         elif draft:
-            print("임시 초안을 지웠습니다. 기준본은 없었습니다.")
+            say("임시 초안을 지웠습니다. 기준본은 없었습니다.")
         elif had_snap:
-            print("이 글의 기준본을 지웠습니다. 원고 파일은 그대로 있습니다.")
+            say("이 글의 기준본을 지웠습니다. 원고 파일은 그대로 있습니다.")
         else:
-            print("지울 기준본이 없습니다.")
+            say("지울 기준본이 없습니다.")
         if draft or not (args.mark or args.compare):
             return
     text = read_text(args.path)
@@ -1584,36 +1619,8 @@ def main():
         else:
             save_snapshot(snap, text)
             out.append(f"\n오래된 기준본({age_text(age)} 저장)을 지금 내용으로 바꿨습니다. 고친 뒤 --compare로 다시 재면 바뀐 정도를 알려 줍니다.")
-    print("\n".join(out))   # 저장까지 마친 뒤 한 번에 내보낸다(출력이 도중에 끊겨도 기준본은 남는다)
-
-
-def output_closed(err, windows=None):
-    """출력을 받던 쪽이 먼저 닫혀서 난 오류인가('| head' 따위).
-
-    리눅스와 macOS는 BrokenPipeError를 낸다. 윈도우는 닫힌 파이프에 쓰면 OSError [Errno 22](EINVAL)를 낸다.
-    EINVAL은 다른 까닭으로도 나므로 출력을 한 번 더 비워 보고, 그것도 실패할 때만 끊긴 것으로 본다.
-    """
-    if isinstance(err, BrokenPipeError):
-        return True
-    if windows is None:
-        windows = os.name == "nt"
-    if not windows or err.errno != errno.EINVAL:
-        return False
-    try:
-        sys.stdout.flush()
-    except (OSError, ValueError):
-        return True
-    return False
+    say("\n".join(out))   # 저장까지 마친 뒤 한 번에 내보낸다(출력이 도중에 끊겨도 기준본은 남는다)
 
 
 if __name__ == "__main__":
-    try:
-        main()
-        sys.stdout.flush()
-    except OSError as err:   # 출력을 받던 쪽이 먼저 닫혔으면 할 일은 끝났으므로 조용히 마친다. 다른 오류는 그대로 낸다
-        if not output_closed(err):
-            raise
-        try:
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        except (OSError, ValueError, AttributeError):
-            pass
+    main()
